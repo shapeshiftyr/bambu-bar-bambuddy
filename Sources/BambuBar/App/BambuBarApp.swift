@@ -59,7 +59,7 @@ struct AppCommands: Commands {
                 }
                 Divider()
             }
-            Button("Add Printer…") { MainWindow.addPrinter() }
+            Button("Bambuddy Server…") { MainWindow.show(.printers) }
             Button("Refresh") { store.refresh() }
                 .keyboardShortcut("r")
             Divider()
@@ -83,10 +83,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Info.plist starts the app as a menu bar accessory (no Dock icon). Opened by hand it shows its
         // window, which brings the Dock icon and menus along; opened at login it stays in the menu bar.
         let background = LaunchContext.wasLaunchedAtLogin() || LaunchContext.requestsBackground
-        if let probe = Probe.arguments {
-            Probe.run(host: probe.host, serial: probe.serial, code: probe.code, seconds: probe.seconds)
-            return
-        }
         SingleInstance.handOverIfRunning(background: background)
         SingleInstance.listen()
         PrinterStore.shared.start()
@@ -213,10 +209,8 @@ enum AppSection: String, CaseIterable, Identifiable {
 final class Navigation {
     static let shared = Navigation()
     var section: AppSection = .overview
-    /// A discovered printer picked in the menu bar panel, to prefill the setup form.
-    var setupCandidate: DiscoveredPrinter?
-    /// The Printer page shows the setup form for another printer.
-    var addingPrinter = false
+    /// The Printer page shows the setup form to change the Bambuddy server or its API key.
+    var changingServer = false
 }
 
 /// The main window, hosted in AppKit so the Dock icon, menus and the panel can all reopen it.
@@ -228,9 +222,8 @@ enum MainWindow {
     private static var window: NSWindow?
     private static var closeObserver: NSObjectProtocol?
 
-    static func show(_ section: AppSection? = nil, setup: DiscoveredPrinter? = nil) {
+    static func show(_ section: AppSection? = nil) {
         if let section { Navigation.shared.section = section }
-        if let setup { Navigation.shared.setupCandidate = setup }
         if window == nil {
             let w = NSWindow(
                 contentRect: NSRect(origin: .zero, size: defaultContentSize),
@@ -273,9 +266,9 @@ enum MainWindow {
 
     static var current: NSWindow? { window }
 
-    /// Opens the setup form to add another printer.
-    static func addPrinter() {
-        Navigation.shared.addingPrinter = true
+    /// Opens the setup form to change the Bambuddy server or its API key.
+    static func changeServer() {
+        Navigation.shared.changingServer = true
         show(.overview)
     }
 }

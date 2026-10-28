@@ -73,12 +73,12 @@ struct AboutPage: View {
             #endif
 
             section("How it works") {
-                paragraph("Bambu Bar connects straight to your printer on the local network, the same way Bambu Studio does in LAN mode: an encrypted MQTT connection on port 8883, signed in with the printer's access code. The printer's certificate is checked against Bambu Lab's own certificate authority.")
-                paragraph("The printer streams its status about once a second. Bambu Bar shows it in the menu bar, keeps a short history of your prints, and shares a snapshot with its widget through a private container on this Mac.")
+                paragraph("Bambu Bar gets your printers from your own Bambuddy server, which keeps the connection to each printer. It reads their status through Bambuddy's API with the API key you gave it, and sends pause, resume, stop, speed and light commands the same way.")
+                paragraph("Bambuddy pushes changes over a WebSocket as they happen, and Bambu Bar checks in every half minute for the rest. It shows the status in the menu bar, keeps a short history of your prints, and shares a snapshot with its widget through a private container on this Mac.")
             }
 
             section("Privacy") {
-                paragraph("Printer data stays on your local network. No app analytics. Printer access codes are stored in your keychain.")
+                paragraph("Printer data only travels between this Mac and your Bambuddy server. No app analytics. The API key is stored in your keychain.")
                 if UpdateChecker.isAvailable {
                     paragraph("Supporter licenses are validated online, with the key and installation ID stored in Keychain. In-app update checks use the latest GitHub release feed and require an active website supporter license. Update checks send no printer data, and updates must carry the developer's signature. Manage automatic updates in Settings → Updates.")
                 } else {

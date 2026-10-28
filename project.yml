@@ -53,9 +53,6 @@ targetTemplates:
     sources:
       - path: Sources/BambuBar
       - path: Sources/Shared
-      - path: Resources/Certificates
-        type: folder
-        buildPhase: resources
       - path: Resources/HMS
         buildPhase: resources
       - path: Resources/filaments.json

@@ -95,9 +95,10 @@ struct PrinterModel: Equatable, Sendable {
               nozzleCount: 1, nozzleMax: 350, bedMax: 120, buildVolume: (340, 320, 340), hasLidar: false, hasLaserModule: true),
     ]
 
-    /// Other ids the same models report (older firmware, Pro and V2 variants).
+    /// Other ids the same models report (older firmware, Pro and V2 variants), and Bambuddy's short names.
     private static let aliases: [String: String] = [
         "BL-P003": "C13", "A12": "N1", "A04": "N1", "A11": "N2S", "O2D": "O1E", "O1C2": "O1C",
+        "X1C": "BL-P001", "A1M": "N1",
     ]
 
     /// By model id, then by serial prefix.

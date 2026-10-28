@@ -2,27 +2,25 @@
 
 _Last updated: October 26, 2026_
 
-Bambu Bar is a macOS app that shows the status of Bambu Lab 3D printers on your local network. It is made by an independent developer (NINA LABS, LLC) and is not affiliated with Bambu Lab.
+Bambu Bar is a macOS app that shows the status of Bambu Lab 3D printers, as reported by your own Bambuddy server. It is made by an independent developer (NINA LABS, LLC) and is not affiliated with Bambu Lab.
 
 ## The short version
 
-Bambu Bar has no app analytics, advertising or tracking. Printer data stays on your network. Direct purchases use our checkout and licensing provider for payment, licensing and customer accounts. The Mac App Store edition uses Apple’s distribution.
+Bambu Bar has no app analytics, advertising or tracking. Printer data only travels between your Mac and your Bambuddy server. Direct purchases use our checkout and licensing provider for payment, licensing and customer accounts. The Mac App Store edition uses Apple’s distribution.
 
 ## What the app stores, and where
 
 Printer data is stored on your Mac:
 
-- **Printers you add** (name, IP address, serial number, model) and your preferences: in the app's local settings.
-- **Printer access codes:** in your macOS keychain. A code is only ever sent to the printer it belongs to, over an encrypted connection that checks the printer's certificate.
+- **Your Bambuddy server's address, its printers** (name, IP address, serial number, model, Bambuddy id) and your preferences: in the app's local settings.
+- **The Bambuddy API key:** in your macOS keychain. It is only ever sent to that server.
 - **Your last few prints** (job name, times, result), used for finish times and notifications: in a file in the app's own container.
 - **A snapshot of each printer's status** for the desktop widgets: in a container shared only with Bambu Bar's widget.
-- **Bambu Studio or OrcaSlicer settings:** if you choose that app's folder or settings file during setup, Bambu Bar reads the printers' access codes and addresses from it. It never changes the file, and it remembers only your permission to read it again.
-
-Removing a printer in Printers deletes its access code from the keychain.
+Disconnecting from the server in Printers deletes the API key from the keychain.
 
 ## Network connections
 
-- **Your printers:** Bambu Bar connects directly to each printer on your local network (MQTT over TLS, port 8883) and listens for the announcements printers send on the network (UDP port 2021) so it can find them.
+- **Your Bambuddy server:** Bambu Bar reads printer status from the server you set up (its REST API and a WebSocket, over http or https as you configured it) and sends print commands to it. It doesn't connect to the printers themselves.
 - **Optional supporter licenses:** Our licensing provider receives the license key, activation ID and a random installation ID for activation and periodic checks, plus network information such as IP address. The key and validation date are stored in a non-synchronizing Keychain item on this Mac.
 - **Updates:** direct copies with an active website supporter license check the latest GitHub release metadata and use a signed update feed hosted on GitHub to install newer versions. Automatic checks can be turned off in Settings. No printer data is sent.
 - **Mac App Store:** purchases and updates are managed by Apple.

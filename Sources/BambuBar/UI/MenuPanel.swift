@@ -583,10 +583,8 @@ struct ConnectionCard: View {
                     } else if store.phase == .localNetworkDenied {
                         Button("Open Local Network Settings") { LocalNetwork.openSettings() }
                             .controlSize(.small)
-                    } else if store.phase == .unauthorized, let known = store.replacementCode {
-                        Button("Use Code from \(known.source)") { store.useReplacementCode() }
-                            .controlSize(.small)
-                        Button("Printers") { MainWindow.show(.printers) }
+                    } else if store.phase == .unauthorized {
+                        Button("Change API Key…") { MainWindow.changeServer() }
                             .controlSize(.small)
                     } else {
                         Button("Try Again") { store.refresh() }
@@ -605,8 +603,8 @@ struct ConnectionCard: View {
     private var title: String {
         switch store.phase {
         case .connecting: return String(localized: "Connecting to \(store.printerName)…")
-        case .unauthorized: return String(localized: "Access code rejected")
-        case .certificate: return String(localized: "Can't verify the printer")
+        case .unauthorized: return String(localized: "API key rejected")
+        case .certificate: return String(localized: "Can't verify the Bambuddy server")
         case .localNetworkDenied: return String(localized: "Bambu Bar can't reach your network")
         default: return String(localized: "\(store.printerName) is offline")
         }
@@ -614,38 +612,18 @@ struct ConnectionCard: View {
 }
 
 struct SetupPrompt: View {
-    @Environment(PrinterStore.self) private var store
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 14) {
                 PrinterArt(status: nil, animated: false)
                     .frame(width: 70, height: 84)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Connect your printer").font(.system(size: 15, weight: .semibold))
-                    Text(store.discovered.isEmpty
-                         ? "Looking for Bambu Lab printers on your network…"
-                         : "Found \(store.discovered.count) printer(s) on your network.")
+                    Text("Connect to Bambuddy").font(.system(size: 15, weight: .semibold))
+                    Text("Bambu Bar shows the printers your Bambuddy server manages. You need its address and an API key.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            ForEach(store.discovered.prefix(3)) { printer in
-                Button { MainWindow.show(.overview, setup: printer) } label: {
-                    HStack {
-                        Image(systemName: "printer.fill").foregroundStyle(Palette.accent)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(printer.name).font(.system(size: 12, weight: .semibold))
-                            Text("\(printer.modelName) · \(printer.host)").font(.system(size: 10.5)).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .panel(radius: 12, padding: 9)
             }
             Button { MainWindow.show(.overview) } label: {
                 Text("Set Up…").frame(maxWidth: .infinity)

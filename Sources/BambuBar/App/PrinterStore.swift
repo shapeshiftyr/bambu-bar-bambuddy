@@ -16,7 +16,8 @@ enum MenuBarStyle: String, CaseIterable, Identifiable {
     }
 }
 
-/// The app's single source of truth: the printers, which one is in view, job history and settings.
+/// The app's single source of truth: the Bambuddy server, its printers, which one is in view, job history and
+/// settings. The printer list follows the server; every printer the API key can see gets a session.
 ///
 /// The window and the menu bar panel show the *selected* printer; the members below without a session
 /// argument (`status`, `pause()`…) act on it. The menu bar icon shows `menuBarSession`, which follows
@@ -29,15 +30,10 @@ final class PrinterStore {
     private(set) var sessions: [PrinterSession] = []
     private(set) var selectedSerial: String?
     private(set) var history: [JobRecord] = []
-    private(set) var discovered: [DiscoveredPrinter] = []
-    /// The search for printers can't get out: macOS's Local Network permission is off or not answered yet.
-    private(set) var discoveryBlocked = false
-    /// Printers whose access code a slicer already knows (this Mac's Bambu Studio or OrcaSlicer, or a settings
-    /// file imported from another Mac this session).
-    private(set) var slicerPrinters: [SlicerPrinter] = []
-    private var importedPrinters: [SlicerPrinter] = []
-    /// Sandboxed (App Store) and not yet given the slicer's folder: setup asks for it.
-    private(set) var slicerAccessNeeded = SlicerImport.needsAccess
+    /// The Bambuddy server, nil until one is set up.
+    private(set) var serverURL: URL?
+    /// Whether the server answers and accepts the API key.
+    private(set) var serverPhase: PrinterConnection.Phase = .idle
     /// A short-lived message after a command ("The printer refused…").
     private(set) var toast: Toast?
     private(set) var isDemo = false
@@ -62,7 +58,7 @@ final class PrinterStore {
     }
 
     private let defaults = UserDefaults.standard
-    private let discovery = PrinterDiscovery()
+    private var hub: BambuddyHub?
     private let notifier = Notifier()
     private var lastWidgetReload = Date.distantPast
     private var lastSnapshotWrite = Date.distantPast
@@ -70,25 +66,10 @@ final class PrinterStore {
     private var lastWidgetKey = ""
     private var isStarted = false
     private var toastTask: Task<Void, Never>?
-    private var insecureTLS = CommandLine.arguments.contains("--insecure-tls")
-
-    /// `--emulator <BambuStudio.conf> [--add-all]`: the mock fleet from scripts/fleet. Its printers come from the
-    /// settings file it writes, as if Bambu Studio had saved them; nothing is saved, not even the access codes.
-    static var emulatorSettings: URL? {
-        let a = CommandLine.arguments
-        guard let i = a.firstIndex(of: "--emulator"), i + 1 < a.count else { return nil }
-        return URL(fileURLWithPath: (a[i + 1] as NSString).expandingTildeInPath)
-    }
-
-    static var developerConnection: (host: String, serial: String, code: String)? {
-        let a = CommandLine.arguments
-        guard let i = a.firstIndex(of: "--connect"), i + 3 < a.count else { return nil }
-        return (a[i + 1], a[i + 2], a[i + 3])
-    }
 
     private enum Keys {
+        static let server = "bambuddyServer"
         static let printers = "printers"
-        static let legacyPrinter = "printerConfig"
         static let selected = "selectedPrinter"
         static let menuBarPrinter = "menuBarPrinter"
         static let menuBarStyle = "menuBarStyle"
@@ -108,6 +89,7 @@ final class PrinterStore {
         confirmStop = defaults.object(forKey: Keys.confirmStop) as? Bool ?? true
         menuBarSerial = defaults.string(forKey: Keys.menuBarPrinter)
         selectedSerial = defaults.string(forKey: Keys.selected)
+        serverURL = defaults.string(forKey: Keys.server).flatMap(URL.init(string:))
     }
 
     // MARK: - Lifecycle
@@ -115,88 +97,166 @@ final class PrinterStore {
     func start() {
         guard !isStarted else { return }
         isStarted = true
-        discovery.onFound = { [weak self] printer in self?.found(printer) }
-        discovery.onBlocked = { [weak self] blocked in self?.discoveryBlockedChanged(blocked) }
 
         if let scenario = DemoDriver.requestedScenario {
             startDemo(scenario)
             return
         }
-        if let dev = Self.developerConnection {
-            // `--connect <host> <serial> <code>`: a throwaway session (the local emulator, a borrowed printer).
-            // Nothing is saved: not the printer, not the access code, not the history.
-            isDemo = true
-            // The model follows the serial's prefix (a P2S if it's not one Bambu Lab uses).
-            let model = PrinterModel.find(code: "", serial: dev.serial) ?? PrinterModel.find(code: "N7")
-            let session = add(PrinterConfig(host: dev.host, serial: dev.serial, name: "\(model?.name ?? "P2S") Emulator",
-                                            modelCode: model?.code ?? "N7"))
-            session.start(accessCode: dev.code, insecure: insecureTLS)
-            writeSnapshot(force: true)
-            return
-        }
 
-        if let settings = Self.emulatorSettings {
-            isDemo = true
-            insecureTLS = true
-            discovery.start()
-            importSlicerSettings(from: settings)
-            if CommandLine.arguments.contains("--add-all") {
-                // Waits a little for the fleet's announcements, which carry the printers' names and models.
-                Task { [weak self] in
-                    for _ in 0..<16 {
-                        guard let self else { return }
-                        if self.slicerPrinters.allSatisfy({ p in self.discovered.contains { $0.serial == p.serial } }) { break }
-                        try? await Task.sleep(for: .milliseconds(500))
-                    }
-                    guard let self else { return }
-                    self.addAll(self.slicerPrinters)
-                }
-            }
-            return
-        }
-
-        for config in loadConfigs() {
-            let session = add(config)
-            if let code = Keychain.accessCode(for: config.serial) {
-                session.start(accessCode: code, insecure: insecureTLS)
-            }
-        }
+        // The printers from last time show (offline) until the server answers.
+        for config in loadConfigs() { add(config) }
         history = HistoryStore.load()
-        // History from the single-printer versions belongs to the printer that was set up then.
-        if let first = sessions.first, history.contains(where: { $0.printerSerial == nil }) {
-            for i in history.indices where history[i].printerSerial == nil { history[i].printerSerial = first.id }
-            HistoryStore.save(history)
-        }
         if selectedSerial == nil || session(selectedSerial!) == nil { selectedSerial = sessions.first?.id }
-        discovery.start()
-        reloadSlicerPrinters()
+        if let serverURL, let key = Keychain.apiKey(for: serverURL.absoluteString) {
+            startHub(BambuddyClient(baseURL: serverURL, apiKey: key))
+        }
         writeSnapshot(force: true)
     }
 
     func stop() {
         for session in sessions { session.stop() }
-        discovery.stop()
+        hub?.stop()
     }
 
     private func loadConfigs() -> [PrinterConfig] {
-        if let data = defaults.data(forKey: Keys.printers),
-           let configs = try? JSONDecoder().decode([PrinterConfig].self, from: data) {
-            return configs
-        }
-        // Versions before multi-printer support saved one printer under another key.
-        if let data = defaults.data(forKey: Keys.legacyPrinter),
-           let config = try? JSONDecoder().decode(PrinterConfig.self, from: data) {
-            defaults.removeObject(forKey: Keys.legacyPrinter)
-            if let data = try? JSONEncoder().encode([config]) { defaults.set(data, forKey: Keys.printers) }
-            return [config]
-        }
-        return []
+        guard let data = defaults.data(forKey: Keys.printers),
+              let configs = try? JSONDecoder().decode([PrinterConfig].self, from: data) else { return [] }
+        // Printers saved before Bambuddy have no id there; the server's list brings them back.
+        return configs.filter { $0.bambuddyID != 0 }
     }
 
     private func saveConfigs() {
         guard !isDemo else { return }
         if let data = try? JSONEncoder().encode(sessions.map(\.config)) { defaults.set(data, forKey: Keys.printers) }
     }
+
+    // MARK: - Bambuddy server
+
+    var hasServer: Bool { serverURL != nil }
+
+    /// "Connected", "API key rejected"… for the server as a whole.
+    var serverSummary: String {
+        switch serverPhase {
+        case .idle: return String(localized: "Not connected")
+        case .connecting: return String(localized: "Connecting…")
+        case .online: return String(localized: "Connected · \(sessions.count) printers")
+        case .offline: return String(localized: "Offline")
+        case .unauthorized: return String(localized: "API key rejected")
+        case .certificate: return String(localized: "Certificate not trusted")
+        case .localNetworkDenied: return String(localized: "No local network access")
+        }
+    }
+
+    var serverDetail: String? {
+        switch serverPhase {
+        case .offline(let reason): return reason
+        case .unauthorized: return BambuddyError.unauthorized.message
+        case .certificate(let reason): return BambuddyError.certificate(reason).message
+        case .localNetworkDenied: return LocalNetwork.advice
+        default: return nil
+        }
+    }
+
+    var serverAPIKey: String? { serverURL.flatMap { Keychain.apiKey(for: $0.absoluteString) } }
+
+    /// Checks the server and the key, then saves them and shows the server's printers. Returns how many it has.
+    @discardableResult
+    func connectServer(url: URL, apiKey: String) async throws -> Int {
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let client = BambuddyClient(baseURL: url, apiKey: key)
+        // Needs no key, so a server that isn't there says so before a key that's wrong does.
+        do {
+            _ = try await client.version()
+        } catch let error as BambuddyError {
+            switch error {
+            case .unreachable, .certificate, .localNetworkDenied: throw error
+            default: break  // an older Bambuddy without the endpoint
+            }
+        }
+        let printers = try await client.printers().filter(\.isActive)
+
+        if let old = serverURL, old != url {
+            Keychain.removeAPIKey(for: old.absoluteString)
+            // Printer ids belong to the old server.
+            for session in sessions { session.stop() }
+            sessions = []
+        }
+        if !isDemo {
+            defaults.set(url.absoluteString, forKey: Keys.server)
+            Keychain.setAPIKey(key, for: url.absoluteString)
+        }
+        serverURL = url
+        startHub(client)
+        sync(printers)
+        return printers.count
+    }
+
+    /// Forgets the server, its key and its printers. Print history stays.
+    func disconnectServer() {
+        hub?.stop()
+        hub = nil
+        serverPhase = .idle
+        for session in sessions { session.stop() }
+        sessions = []
+        if let serverURL { Keychain.removeAPIKey(for: serverURL.absoluteString) }
+        serverURL = nil
+        selectedSerial = nil
+        menuBarSerial = nil
+        defaults.removeObject(forKey: Keys.server)
+        defaults.removeObject(forKey: Keys.printers)
+        writeSnapshot(force: true)
+    }
+
+    private func startHub(_ client: BambuddyClient) {
+        hub?.stop()
+        let hub = BambuddyHub(client: client)
+        hub.onPhase = { [weak self] phase in self?.serverPhase = phase }
+        hub.onPrinters = { [weak self] printers in self?.sync(printers) }
+        self.hub = hub
+        for session in sessions { session.start(hub: hub) }
+        hub.start()
+    }
+
+    /// Makes the sessions match the server's printer list: new printers added, removed ones dropped, names,
+    /// models and addresses brought up to date. A name changed in Bambu Bar stays.
+    private func sync(_ printers: [BambuddyPrinter]) {
+        guard let hub else { return }
+        for printer in printers {
+            if let session = session(printer.serial) {
+                var config = session.config
+                let renamed = config.bambuddyName.map { config.name != $0 } ?? false
+                config.host = printer.host
+                config.modelCode = Self.modelCode(printer)
+                config.bambuddyID = printer.id
+                config.bambuddyName = printer.name
+                if !renamed { config.name = printer.name }
+                guard config != session.config else { continue }
+                // The connection keeps the id it follows and the model it reads the status for.
+                let restart = config.bambuddyID != session.config.bambuddyID || config.modelCode != session.config.modelCode
+                session.config = config
+                if restart { session.start(hub: hub) }
+            } else {
+                add(PrinterConfig(host: printer.host, serial: printer.serial, name: printer.name,
+                                  modelCode: Self.modelCode(printer), bambuddyID: printer.id, bambuddyName: printer.name))
+                    .start(hub: hub)
+            }
+        }
+        let serials = Set(printers.map(\.serial))
+        for session in sessions where !serials.contains(session.id) { session.stop() }
+        // Bambuddy's order, so the picker matches its printer page.
+        sessions = printers.compactMap { p in sessions.first { $0.id == p.serial } }
+        if selectedSerial == nil || session(selectedSerial!) == nil { selectedSerial = sessions.first?.id }
+        if let menuBarSerial, session(menuBarSerial) == nil { self.menuBarSerial = nil }
+        saveConfigs()
+        writeSnapshot(force: true)
+    }
+
+    /// Bambuddy's model ("X1C", "A1 Mini") as one of Bambu Bar's model ids, falling back to the serial's prefix.
+    private static func modelCode(_ printer: BambuddyPrinter) -> String {
+        PrinterModel.named(printer.model)?.code ?? PrinterModel.find(code: "", serial: printer.serial)?.code ?? printer.model
+    }
+
+    // MARK: - Printers
 
     @discardableResult
     private func add(_ config: PrinterConfig) -> PrinterSession {
@@ -218,8 +278,6 @@ final class PrinterStore {
         sessions.append(session)
         return session
     }
-
-    // MARK: - Printers
 
     func session(_ serial: String) -> PrinterSession? { sessions.first { $0.id == serial } }
 
@@ -252,176 +310,28 @@ final class PrinterStore {
 
     var hasMultiplePrinters: Bool { sessions.count > 1 }
 
-    /// Saves a printer (new, or a new address/code for a known one) and connects to it.
-    func connect(to config: PrinterConfig, accessCode: String, alternatives: [String] = []) {
-        let code = accessCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !isDemo { Keychain.setAccessCode(code, for: config.serial) }
-        let session: PrinterSession
-        if let existing = self.session(config.serial) {
-            existing.config = config
-            session = existing
-        } else {
-            session = add(config)
-        }
-        saveConfigs()
-        select(config.serial)
-        session.start(accessCode: code, alternatives: alternatives, insecure: insecureTLS)
-        writeSnapshot(force: true)
-    }
-
-    /// Slicer printers that can be added right away: not set up yet, with an address from the network or the
-    /// slicer's settings.
-    var readySlicerPrinters: [SlicerPrinter] {
-        slicerPrinters.filter { session($0.serial) == nil && (host(for: $0) != nil) }
-    }
-
-    private func host(for printer: SlicerPrinter) -> String? {
-        discovered.first { $0.serial == printer.serial }?.host ?? printer.host
-    }
-
-    /// Adds every printer a slicer knows in one go, named and typed from their network announcements when
-    /// they've been seen, else after their model and serial ("P2S 495").
-    func addAll(_ printers: [SlicerPrinter]) {
-        var added: [PrinterSession] = []
-        for printer in printers.sorted(by: { name(for: $0).localizedStandardCompare(name(for: $1)) == .orderedAscending })
-        where session(printer.serial) == nil {
-            guard let host = host(for: printer), let code = printer.accessCodes.first else { continue }
-            let seen = discovered.first { $0.serial == printer.serial }
-            let config = PrinterConfig(host: host, serial: printer.serial.uppercased(), name: name(for: printer),
-                                       modelCode: seen?.modelCode ?? "")
-            if !isDemo { Keychain.setAccessCode(code, for: config.serial) }
-            let session = add(config)
-            session.start(accessCode: code, alternatives: Array(printer.accessCodes.dropFirst()), insecure: insecureTLS)
-            added.append(session)
-        }
-        guard !added.isEmpty else { return }
-        saveConfigs()
-        if selectedSerial == nil || session(selectedSerial!) == nil { select(added[0].id) }
-        writeSnapshot(force: true)
-    }
-
-    private func name(for printer: SlicerPrinter) -> String {
-        let seen = discovered.first { $0.serial == printer.serial }
-        if let name = seen?.name, !name.isEmpty, name != printer.serial { return name }
-        let model = PrinterModel.find(code: seen?.modelCode ?? "", serial: printer.serial)
-        return "\(model?.name ?? String(localized: "Printer")) \(printer.serial.suffix(3))"
-    }
-
-    /// The name the printer announces on the network (set in Bambu Handy or Bambu Studio), when it has been seen.
-    func announcedName(for serial: String) -> String? {
-        guard let name = discovered.first(where: { $0.serial == serial })?.name, !name.isEmpty, name != serial else { return nil }
+    /// The name Bambuddy has for the printer, when Bambu Bar shows another one.
+    func bambuddyName(for serial: String) -> String? {
+        guard let config = session(serial)?.config, let name = config.bambuddyName, !name.isEmpty, name != config.name else { return nil }
         return name
     }
 
+    /// Renames the printer in Bambu Bar only; Bambuddy keeps its name.
     func rename(_ serial: String, to name: String) {
         guard let session = session(serial) else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        session.config.name = trimmed.isEmpty ? serial : trimmed
-        saveConfigs()
-        writeSnapshot(force: true)
-    }
-
-    func forget(_ serial: String) {
-        guard let session = session(serial) else { return }
-        session.stop()
-        Keychain.removeAccessCode(for: serial)
-        sessions.removeAll { $0.id == serial }
-        if selectedSerial == serial { selectedSerial = sessions.first?.id }
-        if menuBarSerial == serial { menuBarSerial = nil }
+        session.config.name = trimmed.isEmpty ? session.config.bambuddyName ?? serial : trimmed
         saveConfigs()
         writeSnapshot(force: true)
     }
 
     func refresh() {
-        discovery.search()
+        hub?.syncNow()
         current?.refresh()
     }
 
-    func searchForPrinters() {
-        discovery.search()
-        reloadSlicerPrinters()
-    }
-
-    private func found(_ printer: DiscoveredPrinter) {
-        if let i = discovered.firstIndex(where: { $0.serial == printer.serial }) {
-            discovered[i] = printer
-        } else {
-            discovered.append(printer)
-        }
-        // Follow a printer when DHCP hands it a new address.
-        if let session = session(printer.serial), session.config.host != printer.host, !isDemo {
-            session.config.host = printer.host
-            saveConfigs()
-            session.restart()
-        }
-    }
-
-    /// Local network access is off, as far as the search or any connection can tell.
-    var localNetworkBlocked: Bool { discoveryBlocked || sessions.contains { $0.phase == .localNetworkDenied } }
-
-    private func discoveryBlockedChanged(_ blocked: Bool) {
-        discoveryBlocked = blocked
-        // Access just came back: reconnect now rather than at the end of the back-off.
-        if !blocked { for session in sessions where session.phase == .localNetworkDenied { session.refresh() } }
-    }
-
-    /// The serial of the printer at `host` (an IP address, or `host:port` for a mock printer), read from its certificate.
-    func identifyPrinter(at host: String) async -> Result<String, PrinterIdentity.Failure> {
-        let endpoint = PrinterConfig(host: host, serial: "", name: "", modelCode: "").endpoint
-        return await PrinterIdentity.serial(host: endpoint.host, port: endpoint.port, insecure: insecureTLS)
-    }
-
-    // MARK: - Access codes from slicers
-
-    /// Rescans this Mac's slicer settings.
-    func reloadSlicerPrinters() {
-        Task.detached(priority: .utility) {
-            let scanned = SlicerImport.scan()
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                var all = self.importedPrinters
-                for printer in scanned where !all.contains(where: { $0.serial == printer.serial }) { all.append(printer) }
-                if all != self.slicerPrinters { self.slicerPrinters = all }
-                self.slicerAccessNeeded = SlicerImport.needsAccess
-            }
-        }
-    }
-
-    /// Reads a `BambuStudio.conf` / `OrcaSlicer.conf` the person picked or dropped (say, copied from the Mac
-    /// that runs the slicer). Returns how many printers it knew; they're kept for this session only.
-    @discardableResult
-    func importSlicerSettings(from url: URL) -> Int {
-        let found = SlicerImport.read(picked: url)
-        if !found.isEmpty && !isDemo {
-            SlicerImport.rememberAccess(to: url)
-            slicerAccessNeeded = SlicerImport.needsAccess
-        }
-        for printer in found {
-            importedPrinters.removeAll { $0.serial == printer.serial }
-            importedPrinters.insert(printer, at: 0)
-        }
-        var all = importedPrinters
-        for printer in slicerPrinters where !all.contains(where: { $0.serial == printer.serial }) { all.append(printer) }
-        slicerPrinters = all
-        return found.count
-    }
-
-    func slicerPrinter(serial: String) -> SlicerPrinter? {
-        slicerPrinters.first { $0.serial.caseInsensitiveCompare(serial) == .orderedSame }
-    }
-
-    /// A slicer code for the current printer that differs from the one that was just rejected.
-    var replacementCode: SlicerPrinter? {
-        guard let current, let printer = slicerPrinter(serial: current.id),
-              printer.accessCodes.contains(where: { $0 != current.accessCode }) else { return nil }
-        return printer
-    }
-
-    func useReplacementCode() {
-        guard let current, let printer = replacementCode else { return }
-        let codes = printer.accessCodes.filter { $0 != current.accessCode }
-        connect(to: current.config, accessCode: codes[0], alternatives: Array(codes.dropFirst()))
-    }
+    /// macOS keeps the app off the local network, where the server is.
+    var localNetworkBlocked: Bool { serverPhase == .localNetworkDenied }
 
     // MARK: - The current printer
 
@@ -433,7 +343,6 @@ final class PrinterStore {
     var printerName: String { current?.config.name ?? String(localized: "Printer") }
     var chamberLightOn: Bool { current?.chamberLightOn ?? false }
     var speed: SpeedLevel { current?.speed ?? .standard }
-    var accessCode: String? { current?.accessCode }
     var linkSummary: String { current?.linkSummary ?? String(localized: "No printer set up") }
     var linkDetail: String? { current?.linkDetail }
 
@@ -496,9 +405,7 @@ final class PrinterStore {
 
     private func acknowledged(_ session: PrinterSession, ok: Bool, reason: String?) {
         guard !ok else { return }
-        let detail = (reason ?? "").lowercased().contains("verify")
-            ? String(localized: "The printer only accepts commands in Developer Mode.")
-            : (reason.map { String(localized: "The printer refused: \($0)", comment: "The printer's reason, in English") } ?? String(localized: "The printer refused the command."))
+        let detail = reason ?? String(localized: "Bambuddy couldn't send the command to the printer.")
         showToast(hasMultiplePrinters ? "\(session.config.name): \(detail)" : detail, error: true)
     }
 
@@ -680,7 +587,7 @@ final class PrinterStore {
 enum HistoryStore {
     /// Demo and developer sessions never touch the real history.
     private static var isEphemeral: Bool {
-        CommandLine.arguments.contains("--demo") || CommandLine.arguments.contains("--connect") || CommandLine.arguments.contains("--emulator")
+        CommandLine.arguments.contains("--demo")
     }
 
     private static var url: URL? {

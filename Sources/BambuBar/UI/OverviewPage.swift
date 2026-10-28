@@ -195,7 +195,7 @@ enum NozzleType {
 }
 
 /// The printer's name as the page title, with a pencil to rename it. The name is Bambu Bar's own: it starts as
-/// the one the printer announces (set in Bambu Handy) and changing it here doesn't rename the printer.
+/// the one Bambuddy has and changing it here doesn't rename the printer there.
 struct PrinterNameField: View {
     @Environment(PrinterStore.self) private var store
     @State private var editing = false
@@ -249,10 +249,10 @@ struct PrinterNameField: View {
     }
 
     private func hint(_ config: PrinterConfig) -> String {
-        if let announced = store.announcedName(for: config.serial), announced != draft {
-            return String(localized: "Only in Bambu Bar. The printer still calls itself \u{201C}\(announced)\u{201D}; rename it there in Bambu Handy.")
+        if let name = config.bambuddyName, name != draft {
+            return String(localized: "Only in Bambu Bar. Bambuddy still calls it \u{201C}\(name)\u{201D}; rename it there to change it everywhere.")
         }
-        return String(localized: "Only in Bambu Bar, for the menu bar, window and widgets. The printer keeps its own name.")
+        return String(localized: "Only in Bambu Bar, for the menu bar, window and widgets. Bambuddy keeps its own name.")
     }
 
     private func save() {

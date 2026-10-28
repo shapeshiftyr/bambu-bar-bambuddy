@@ -1,18 +1,18 @@
 import Foundation
 import Security
 
-/// The printer's LAN access code, kept in the keychain per serial number.
+/// The Bambuddy API key, kept in the keychain per server.
 enum Keychain {
-    private static let service = "dev.rolottr.BambuBar.access-code"
+    private static let service = "dev.rolottr.BambuBar.bambuddy-api-key"
 
-    /// The item for a printer. The App Store build keeps its codes in the data protection keychain, under its App
+    /// The item for a server. The App Store build keeps its keys in the data protection keychain, under its App
     /// Store identity: the login keychain would ask for permission (and block launch until answered) whenever it
-    /// met a code saved by the differently signed GitHub build. Its sandbox starts with settings of its own anyway.
-    private static func item(_ serial: String) -> [String: Any] {
+    /// met a key saved by the differently signed GitHub build. Its sandbox starts with settings of its own anyway.
+    private static func item(_ server: String) -> [String: Any] {
         var item: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: serial,
+            kSecAttrAccount as String: server,
         ]
         #if APP_STORE
             item[kSecUseDataProtectionKeychain as String] = true
@@ -20,8 +20,8 @@ enum Keychain {
         return item
     }
 
-    static func accessCode(for serial: String) -> String? {
-        var query = item(serial)
+    static func apiKey(for server: String) -> String? {
+        var query = item(server)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -29,17 +29,17 @@ enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func setAccessCode(_ code: String, for serial: String) {
-        let data = Data(code.utf8)
-        if SecItemUpdate(item(serial) as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecItemNotFound {
-            var add = item(serial)
+    static func setAPIKey(_ key: String, for server: String) {
+        let data = Data(key.utf8)
+        if SecItemUpdate(item(server) as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecItemNotFound {
+            var add = item(server)
             add[kSecValueData as String] = data
-            add[kSecAttrLabel as String] = "Bambu Bar printer access code"
+            add[kSecAttrLabel as String] = "Bambu Bar Bambuddy API key"
             SecItemAdd(add as CFDictionary, nil)
         }
     }
 
-    static func removeAccessCode(for serial: String) {
-        SecItemDelete(item(serial) as CFDictionary)
+    static func removeAPIKey(for server: String) {
+        SecItemDelete(item(server) as CFDictionary)
     }
 }

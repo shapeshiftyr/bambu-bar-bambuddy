@@ -43,7 +43,7 @@ struct WidgetState {
         switch snapshot.link {
         case .unconfigured: return String(localized: "Set up Bambu Bar")
         case .offline: return String(localized: "Offline")
-        case .unauthorized: return String(localized: "Access code rejected")
+        case .unauthorized: return String(localized: "API key rejected")
         case .connecting where status == nil: return String(localized: "Connecting…")
         default: break
         }
@@ -56,7 +56,7 @@ struct WidgetState {
         guard let s = status else {
             switch snapshot.link {
             case .unconfigured: return String(localized: "Open the app to connect your printer")
-            case .unauthorized: return String(localized: "Enter the access code again in the app")
+            case .unauthorized: return String(localized: "Enter the API key again in the app")
             default: return lastJobLine ?? String(localized: "Waiting for the printer")
             }
         }
@@ -422,8 +422,8 @@ struct LargeWidgetView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.secondary)
                     Text(snapshot.link == .unconfigured
-                         ? "Open Bambu Bar, pick your printer and enter its access code. Progress, temperatures and filament show up here."
-                         : "Bambu Bar shows the printer here again as soon as it's back on the network.")
+                         ? "Open Bambu Bar and connect it to your Bambuddy server. Progress, temperatures and filament show up here."
+                         : "Bambu Bar shows the printer here again as soon as Bambuddy reaches it.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

@@ -61,7 +61,7 @@ struct FleetPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             PageHeader(title: "All Printers", subtitle: String(localized: "\(store.sessions.count) printers") + " · " + store.fleetSummary) {
-                Button("Add Printer…") { MainWindow.addPrinter() }
+                Button("Bambuddy Server…") { MainWindow.show(.printers) }
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 14)], spacing: 14) {
                 ForEach(store.fleetSessions) { session in

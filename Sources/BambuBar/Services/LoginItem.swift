@@ -58,9 +58,9 @@ enum LaunchContext {
     /// `--background` starts the app the way a login launch does: menu bar only, no window, no Dock icon.
     static var requestsBackground: Bool { CommandLine.arguments.contains("--background") }
 
-    /// Demo, showcase, README-frame and probe runs: no update checks.
+    /// Demo, showcase and README-frame runs: no update checks.
     static var isDeveloperRun: Bool {
         let arguments = CommandLine.arguments
-        return ["--demo", "--showcase", "--readme-frames", "--store-media", "--probe", "--connect", "--emulator"].contains { arguments.contains($0) }
+        return ["--demo", "--showcase", "--readme-frames", "--store-media"].contains { arguments.contains($0) }
     }
 }

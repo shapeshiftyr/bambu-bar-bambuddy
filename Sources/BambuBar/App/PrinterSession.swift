@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// One configured printer: its connection, live status and the commands in flight.
+/// One printer from the Bambuddy server: its connection, live status and the commands in flight.
 /// `PrinterStore` owns the sessions and handles what spans printers (history, notifications, widgets).
 @MainActor
 @Observable
@@ -14,11 +14,9 @@ final class PrinterSession: Identifiable {
     /// Commands sent but not yet reflected in a report, so the controls respond immediately.
     private(set) var pendingLight: Bool?
     private(set) var pendingSpeed: SpeedLevel?
-    /// More codes to try if the printer rejects the current one (a slicer may hold an old and a new one).
-    var fallbackCodes: [String] = []
     /// False until the first report after connecting, so state already in progress doesn't notify.
     var hasBaseline = false
-    /// When the printer last sent anything, to the second ("Updated 3s ago").
+    /// When Bambuddy last sent anything about the printer, to the second ("Updated 3s ago").
     private(set) var lastHeard: Date?
 
     var onPhase: ((PrinterSession, PrinterConnection.Phase) -> Void)?
@@ -28,14 +26,13 @@ final class PrinterSession: Identifiable {
 
     @ObservationIgnored private let connection = PrinterConnection()
     @ObservationIgnored private var demo: DemoDriver?
-    @ObservationIgnored private var insecure = false
     @ObservationIgnored private var pendingTask: Task<Void, Never>?
 
     init(config: PrinterConfig) {
         id = config.serial
         self.config = config
         connection.onPhase = { [weak self] phase in self?.phaseChanged(phase) }
-        connection.onStatus = { [weak self] status, doc in self?.received(status, canceled: ReportParser.wasCanceled(doc)) }
+        connection.onStatus = { [weak self] status, canceled in self?.received(status, canceled: canceled) }
         connection.onAck = { [weak self] command, ok, reason in
             guard let self else { return }
             if !ok { self.pendingLight = nil; self.pendingSpeed = nil }
@@ -51,12 +48,10 @@ final class PrinterSession: Identifiable {
 
     // MARK: - Lifecycle
 
-    func start(accessCode: String, alternatives: [String] = [], insecure: Bool) {
-        self.insecure = insecure
-        fallbackCodes = alternatives.filter { $0 != accessCode }
+    func start(hub: BambuddyHub) {
         status = nil
         hasBaseline = false
-        connection.start(config, accessCode: accessCode, insecure: insecure)
+        connection.start(config, hub: hub)
     }
 
     /// Runs a simulated printer instead of a connection (`--demo`).
@@ -80,19 +75,12 @@ final class PrinterSession: Identifiable {
 
     func refresh() { connection.refresh() }
 
-    /// Reconnects with the stored code, e.g. after the printer moved to a new IP address.
-    func restart() {
-        guard demo == nil, let code = Keychain.accessCode(for: config.serial) else { return }
-        connection.start(config, accessCode: code, insecure: insecure)
-    }
-
     // MARK: - Derived
 
     /// A live status is on hand: connected, or briefly reconnecting after a drop.
     var isOnline: Bool { status != nil && (phase == .online || phase == .connecting) }
     var chamberLightOn: Bool { pendingLight ?? status?.chamberLightOn ?? false }
     var speed: SpeedLevel { pendingSpeed ?? status?.speed ?? .standard }
-    var accessCode: String? { Keychain.accessCode(for: config.serial) }
 
     var linkSummary: String {
         switch phase {
@@ -100,7 +88,7 @@ final class PrinterSession: Identifiable {
         case .connecting: return String(localized: "Connecting…")
         case .online: return String(localized: "Connected")
         case .offline: return String(localized: "Offline")
-        case .unauthorized: return String(localized: "Access code rejected")
+        case .unauthorized: return String(localized: "API key rejected")
         case .certificate: return String(localized: "Certificate not trusted")
         case .localNetworkDenied: return String(localized: "No local network access")
         }
@@ -109,8 +97,8 @@ final class PrinterSession: Identifiable {
     var linkDetail: String? {
         switch phase {
         case .offline(let reason): return reason
-        case .unauthorized: return String(localized: "Check the access code on the printer's screen (Settings → Network) and enter it again.")
-        case .certificate(let reason): return String(localized: "The printer's TLS certificate couldn't be verified: \(reason)")
+        case .unauthorized: return BambuddyError.unauthorized.message
+        case .certificate(let reason): return BambuddyError.certificate(reason).message
         case .localNetworkDenied: return LocalNetwork.advice
         default: return nil
         }
@@ -154,14 +142,6 @@ final class PrinterSession: Identifiable {
     // MARK: - Updates
 
     private func phaseChanged(_ phase: PrinterConnection.Phase) {
-        if phase == .unauthorized, !fallbackCodes.isEmpty {
-            // Try the slicer's other stored code before telling anyone.
-            let next = fallbackCodes.removeFirst()
-            Keychain.setAccessCode(next, for: config.serial)
-            connection.start(config, accessCode: next, insecure: insecure)
-            return
-        }
-        if phase == .online { fallbackCodes = [] }
         self.phase = phase
         onPhase?(self, phase)
     }

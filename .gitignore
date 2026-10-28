@@ -11,5 +11,3 @@ xcuserdata/
 *.key
 Resources/AppIcon.icns
 Resources/Assets.xcassets/
-scripts/emulator/certs/
-scripts/fleet/out/

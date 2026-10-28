@@ -1,8 +1,8 @@
 import AppKit
 
 /// One Bambu Bar at a time: a second copy (another build, or a launch racing the login item) hands over to the
-/// one already running and quits, so there's one menu bar icon and one connection per printer. Demo, showcase and
-/// emulator runs are left alone, since they're meant to run next to the installed app.
+/// one already running and quits, so there's one menu bar icon and one connection per printer. Demo and showcase
+/// runs are left alone, since they're meant to run next to the installed app.
 @MainActor
 enum SingleInstance {
     private static let showWindow = Notification.Name("dev.rolottr.BambuBar.showWindow")

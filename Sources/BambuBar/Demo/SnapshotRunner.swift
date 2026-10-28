@@ -18,7 +18,7 @@ enum SnapshotRunner {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--page"), i + 1 < args.count {
             if args[i + 1] == "add" {
-                MainWindow.addPrinter()
+                MainWindow.changeServer()
             } else if let section = AppSection(rawValue: args[i + 1]) {
                 MainWindow.show(section)
             }

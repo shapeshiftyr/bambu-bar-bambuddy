@@ -92,9 +92,9 @@ private struct MainContentView: View {
     private var page: some View {
         switch navigation.section {
         case .fleet:
-            if store.hasMultiplePrinters && !navigation.addingPrinter { FleetPage() } else if store.isConfigured { OverviewPage() } else { SetupPage() }
+            if store.hasMultiplePrinters && !navigation.changingServer { FleetPage() } else if store.isConfigured { OverviewPage() } else { SetupPage() }
         case .overview:
-            if store.isConfigured && !navigation.addingPrinter { OverviewPage() } else { SetupPage() }
+            if store.isConfigured && !navigation.changingServer { OverviewPage() } else { SetupPage() }
         case .filament: FilamentPage()
         case .widgets: WidgetsPage()
         case .printers: PrintersPage()

@@ -10,6 +10,8 @@
 
 **Your Bambu Lab printer, one click away in the menu bar.**
 
+> **This fork gets its data from a [Bambuddy](https://wiki.bambuddy.cool) server** instead of connecting to each printer itself. Point it at your Bambuddy server with an API key and every printer Bambuddy manages shows up; status comes from Bambuddy's REST API and WebSocket, and pause, resume, stop, speed and light commands go through it too.
+
 Bambu Bar is a native macOS app that shows your 3D printer's progress, temperatures and filament without opening Bambu Studio or Bambu Handy. Glance at the menu bar for percent and time left, click for everything else, or keep a widget on your desktop.
 
 Built with Swift and SwiftUI. Printer data stays local, with no app analytics. The GitHub build is free to use. Optional supporter licenses enable automatic updates; the Mac App Store edition is independent.
@@ -22,7 +24,7 @@ Built with Swift and SwiftUI. Printer data stays local, with no app analytics. T
 
 The printer is in another room, and the slicer is a big app to keep open just to see how long is left. Bambu Bar keeps the answer in the menu bar: **64% · 1h 02m**. Click it and a panel shows the job, the stage, temperatures, the spool in use and how much filament is left, with pause, stop, light and speed controls right there.
 
-It talks to the printer directly over your network, the same way Bambu Studio does in LAN mode, so it works with the printer still bound to your Bambu account and nothing goes through a cloud.
+It reads everything from your own Bambuddy server, which already keeps a connection to each printer, so nothing goes through a cloud and the Mac never needs the printers' access codes.
 
 ## Features
 
@@ -30,7 +32,7 @@ It talks to the printer directly over your network, the same way Bambu Studio do
 | --- | --- |
 | **Menu bar** | A printer glyph that fills as the print grows, with progress and time left beside it (or just one, or only the icon), and a pause or alert mark when the printer needs you. |
 | **Panel** | The job, its stage ("Heating hotend", "Paused: filament ran out"), percentage, layers, time left and finish time; nozzle, bed and chamber temperatures; AMS spools with what's left and the humidity; printer errors in plain words, in Bambu Lab's own translation. |
-| **Grams left** | Bambu Lab spools tell the AMS their net weight, so Bambu Bar shows filament left in grams (≈ 810 g), not just a percentage, and how much you have on hand in total. |
+| **Filament left** | What's left on each spool as a percentage. (Bambuddy doesn't pass on the spool weight from the RFID tag, so this fork can't show grams.) |
 | **Named filament** | Bambu Lab spools show their colour by name (Grass Green, Charcoal). Other spools show the maker and product of the preset you set the slot to on the printer or in Bambu Studio, such as SUNLU PLA Matte. |
 | **Controls** | Pause, resume, stop (with a confirmation), print speed (Silent, Standard, Sport, Ludicrous) and a chamber light switch. |
 | **3D printer models** | Each printer family is modelled in Blender: the P2S/P1S/X1 enclosure, the wider dual-nozzle H2, the open P1P frame, the A1's arch with its AMS Lite, the A1 mini. In the app it's a live 3D model you can turn with the mouse: the print grows layer by layer in the filament's colour, the bed drops (or the A1's gantry rises) as it goes, the toolhead moves while printing, the AMS spools take their real colours and the chamber light follows the printer's. Widgets use studio renders of the same models. |
@@ -39,8 +41,8 @@ It talks to the printer directly over your network, the same way Bambu Studio do
 | **Many printers** | Bambu Bar watches all of them at once. **All Printers** in the window and the grid button in the panel list every printer, the ones that need you first (failed, paused), then by soonest finish. Switch from the printer name at the top of the panel or the window's sidebar, and choose which one the menu bar shows (or let it pick whichever is busy). |
 | **Desktop widgets** | Small, medium and large, one per printer if you like, counting down between updates. |
 | **Notifications** | Print finished, failed or canceled, paused (filament runout and the like), new printer errors, and optionally when a print starts. |
-| **Easy setup** | Finds printers on your network and reads the access codes from Bambu Studio or OrcaSlicer, on this Mac or from a settings file copied from another one. When the slicer knows several printers, **Add All** sets them all up at once. |
-| **Mac integration** | Open at Login, no Dock icon while it lives in the menu bar (the icon and menus appear while its window is open), keyboard shortcuts, and it follows the printer when DHCP gives it a new address. |
+| **Easy setup** | Enter your Bambuddy server's address and an API key. Every printer Bambuddy has shows up, and the list follows Bambuddy: printers added or removed there appear or disappear here. |
+| **Mac integration** | Open at Login, no Dock icon while it lives in the menu bar (the icon and menus appear while its window is open), keyboard shortcuts. |
 | **17 languages** | English, Čeština, Deutsch, Español, Français, Italiano, Magyar, Nederlands, Polski, Português (Brasil), Svenska, Türkçe, Русский, Українська, 日本語, 한국어, 简体中文 and 繁體中文. It follows your Mac's language, or the one picked in **Settings → Language**. Printer terms follow Bambu Studio's translations, and printer errors use Bambu Lab's own texts where Bambu publishes them (all but Czech, Turkish and Ukrainian, which show them in English, and Traditional Chinese, which shows the Simplified ones). |
 | **Updates** | The App Store version updates through the App Store. Direct copies with an active website supporter license check GitHub once a day for a new release (turn it off in Settings) and show what's new with **Install Update**, **Skip This Version** or **Remind Me Later**; installing downloads it, verifies its signature and restarts the app. **Check for Updates…** in the app menu asks right away, and Settings can install updates automatically. |
 
@@ -49,18 +51,18 @@ It talks to the printer directly over your network, the same way Bambu Studio do
 ### Requirements
 
 - **macOS 26 Tahoe or later**, Apple silicon or Intel.
-- A Bambu Lab printer on the same local network as the Mac.
+- A [Bambuddy](https://wiki.bambuddy.cool) server that manages your printers, reachable from the Mac over http or https, and an API key for it.
 
 ### Install and connect
 
 1. Get the ZIP from the latest GitHub release, unzip it, and move **Bambu Bar.app** to Applications. No license is needed to use the app. To enable automatic updates, [support the project for $9.99](https://bambubar.app/download) and enter your key in **Bambu Bar → Manage License…**. In-app checks for the latest GitHub release require an active website supporter license. The Mac App Store edition is distributed separately.
-2. Open it. The window lists the printers it finds on your network; pick yours. Not listed? Open **Enter address manually** and type the printer's IP address (printer screen → **Settings → Network**); Bambu Bar reads the serial number from the printer. When macOS asks whether Bambu Bar may find devices on your local network, click **Allow**: without it the app can't see or reach any printer, and it says so with a button to the right switch in System Settings.
-3. The **access code** usually fills itself in: if Bambu Studio or OrcaSlicer on this Mac has used the printer, Bambu Bar reads the code from its settings. Slicer on another Mac? Drop that Mac's `~/Library/Application Support/BambuStudio/BambuStudio.conf` onto the setup page. Otherwise read it off the printer: **Settings → Network** on its screen shows the 8-character **Access Code**.
-4. Click **Connect**. The menu bar starts showing progress as soon as the printer reports in.
+2. In Bambuddy open **Settings → API Keys** and create a key. **Read status** is enough to watch the printers; turn on **Control printer** as well if you want pause, resume, stop, speed and the chamber light from Bambu Bar.
+3. Open Bambu Bar and enter the server's address (the one you open Bambuddy at in a browser, such as `http://192.168.1.10:8000`) and the key. If the server is on your local network and macOS asks whether Bambu Bar may find devices on it, click **Allow**.
+4. Click **Connect**. Every printer Bambuddy has appears, and the menu bar starts showing progress straight away.
 
-The access code is stored in your keychain and only ever sent to the printer. If it changes later (after a factory reset, say) and the slicer has the new one, Bambu Bar offers to use it.
+The API key is stored in your keychain and only ever sent to your Bambuddy server. **Printers** in the window shows the server, lets you change the address or key, and disconnects.
 
-Closing the window keeps Bambu Bar running in the menu bar without a Dock icon. Opened at login, it starts quietly in the menu bar; open it from Spotlight or the menu bar to see the window. **Add Printer…** in the printer picker or in Settings adds another printer.
+Closing the window keeps Bambu Bar running in the menu bar without a Dock icon. Opened at login, it starts quietly in the menu bar; open it from Spotlight or the menu bar to see the window.
 
 ### About downloaded builds
 
@@ -68,7 +70,7 @@ Direct distribution builds are **universal, Developer ID signed and notarized by
 
 ### Controlling prints
 
-Reading status works in any mode. Pause, resume, stop and speed changes are accepted only when the printer is in **LAN Only** mode with **Developer Mode** on (printer screen → Settings → Network). That's Bambu Lab's rule for third-party apps; without it the printer refuses the command and Bambu Bar says so (the buttons show a lock). The chamber light works either way.
+Commands go through Bambuddy, so the API key needs **Control printer** turned on; without it Bambu Bar says so. Pause, resume, stop and speed changes are also accepted only when the printer is in **LAN Only** mode with **Developer Mode** on (printer screen → Settings → Network). That's Bambu Lab's rule for third-party apps; without it the buttons show a lock.
 
 ## Desktop widgets
 
@@ -78,7 +80,7 @@ Reading status works in any mode. Pause, resume, stop and speed changes are acce
 
 - **Small:** a progress ring with the percentage, time left, the filament going in, and the finish time and layers. Paused, it says why; finished, how long ago and how long it took; idle, the temperatures and loaded spools.
 - **Medium:** the rendered printer with the part growing in the filament's colour and the AMS spools in theirs, the job and its progress, finish time, layers and temperatures.
-- **Large:** everything: temperature tiles (the chamber where the model has a sensor, otherwise the second nozzle or the part fan), every AMS spool with the grams left, the newest error in plain words and how the last print went.
+- **Large:** everything: temperature tiles (the chamber where the model has a sensor, otherwise the second nozzle or the part fan), every AMS spool with what's left on it, the newest error in plain words and how the last print went.
 
 To add one, right-click the desktop and choose **Edit Widgets…**, search for **Bambu Bar** and drag the size you want onto the desktop or into Notification Center. With more than one printer, right-click a widget and choose **Edit "Printer"** to pick which printer it shows; a widget left empty follows the menu bar printer.
 
@@ -91,26 +93,24 @@ The widget shows what the app last saw, so keep Bambu Bar running (Open at Login
 | **P2S** | Development printer; verified with firmware **01.03.00.00** and an AMS 2 Pro. |
 | **X1, P1, A1, H2 families** | Same LAN protocol and certificate authorities; implemented, not verified on hardware. |
 
-The printer can be in cloud mode or LAN Only mode; controls need LAN Only with Developer Mode (see above). The camera is not shown.
-
-If you try another model, [open an issue](https://github.com/rolottr/bambu-bar/issues) with the model, firmware, macOS version and what worked. Run `--probe` (below) for a report; remove the serial number and access code before posting it.
+Any printer Bambuddy supports should work, since Bambu Bar only sees what Bambuddy reports. Controls need LAN Only with Developer Mode (see above). The camera is not shown.
 
 ## How it works
 
-Bambu printers run an MQTT broker on port 8883. Bambu Bar connects to it over TLS 1.2 (the P2S doesn't answer TLS 1.3), signs in as `bblp` with the access code, and accepts the printer only if its certificate chains to Bambu Lab's own certificate authorities, which ship with the app, *and* is issued to the printer's serial number, so no other device on the network can collect the code. It asks once for a full report and then merges the changes the printer sends about once a second.
+Bambu Bar talks only to your Bambuddy server's API (`/api/v1`), authenticated with the `X-API-Key` header. It lists the printers with `GET /printers/` every minute, fetches each one's full status from `GET /printers/{id}/status`, and opens one WebSocket (`/api/v1/ws`, with a short-lived token from `POST /auth/ws-token`) on which Bambuddy pushes status changes as they happen. Pushes carry only some fields, so they're merged over the last full status, and each printer is also polled every 30 seconds (10 while the WebSocket is down) for what Bambuddy doesn't push, such as time left and errors. Commands are `POST`s to `print/pause`, `print/resume`, `print/stop`, `print-speed` and `chamber-light`.
 
-Printers announce themselves on UDP port 2021; that's how Bambu Bar lists them during setup and notices when one moves to a new address. The widgets read a snapshot the app writes to an app group container on this Mac.
+The widgets read a snapshot the app writes to an app group container on this Mac.
 
 ## Privacy and local storage
 
-Bambu Bar talks to your printers on your local network, with no app analytics. Optional supporter licenses are validated online to enable automatic updates and the Hero Supporter badge. Both manual and automatic in-app update checks require an active website supporter license. License checks send the key, activation ID and a random installation ID, never printer data. Supporter benefits remain active for up to seven days offline after validation; printer monitoring has no license or offline-time limit. The Mac App Store build uses Apple’s distribution. See the [privacy policy](PRIVACY.md).
+Bambu Bar talks only to your Bambuddy server, with no app analytics. Optional supporter licenses are validated online to enable automatic updates and the Hero Supporter badge. Both manual and automatic in-app update checks require an active website supporter license. License checks send the key, activation ID and a random installation ID, never printer data. Supporter benefits remain active for up to seven days offline after validation; printer monitoring has no license or offline-time limit. The Mac App Store build uses Apple’s distribution. See the [privacy policy](PRIVACY.md).
 
-- **Printers (address, serial, name) and preferences:** local macOS user defaults.
-- **Access codes:** your login keychain.
+- **Bambuddy server address, its printers (name, serial, model, Bambuddy id) and preferences:** local macOS user defaults.
+- **API key:** your login keychain.
 - **Last prints** (for "Last: …" and finish times, only what the app saw while running): `~/Library/Application Support/Bambu Bar/history.json`.
 - **Widget snapshot:** `~/Library/Group Containers/<team>.dev.rolottr.BambuBar/printers.json`.
 
-The App Store version is sandboxed, so its settings and history live in `~/Library/Containers/dev.rolottr.BambuBar` instead, and it reads Bambu Studio's access codes only after you choose its folder during setup.
+The App Store version is sandboxed, so its settings and history live in `~/Library/Containers/dev.rolottr.BambuBar` instead.
 
 ## Building from source
 
@@ -160,15 +160,11 @@ UPLOAD=1 ./scripts/appstore.sh    # archive + upload to App Store Connect
 ./scripts/appstore-media.sh       # 2880×1800 screenshots + 1080p app preview, drawn from the demo printers
 ```
 
-The **AppStore** configuration (scheme **BambuBar App Store**, also for Product → Archive in Xcode after `scripts/generate.sh`) builds a sandboxed app with Xcode's automatic signing, leaves out the GitHub update checker and asks for Bambu Studio's folder instead of reading it directly.
+The **AppStore** configuration (scheme **BambuBar App Store**, also for Product → Archive in Xcode after `scripts/generate.sh`) builds a sandboxed app with Xcode's automatic signing and leaves out the GitHub update checker.
 
 ### Developing without a printer
 
 - `--demo [printing|preparing|paused|finished|failed|idle|offline|unconfigured]` runs a simulated P2S; add `--fleet` for six printers. Nothing is saved and no network is used.
-- `scripts/emulator/printer.py` runs a pretend P2S on `127.0.0.1:8883` (needs `brew install mosquitto`): a TLS MQTT broker that replays a real P2S report, then prints, heats and obeys pause, resume, stop, speed and light. Connect with
-  `"build/App.noindex/Bambu Bar.app/Contents/MacOS/Bambu Bar" --connect 127.0.0.1 22E00EMULATOR0 12345678 --insecure-tls`
-- `scripts/fleet/run.sh` starts a mock fleet of 12 printers in Docker (P2S, P1S, P1P, X1C, X1E, H2D, H2S, H2C, A1, A1 mini; printing, paused, failed, finished, idle and one switched off) and opens Bambu Bar against it with `--emulator`. Add `--import` to start on the Add Printer page and try **Add All**, `SSDP=1` to have the printers announce their names and models, `--stop` to stop it. The fleet writes `scripts/fleet/out/BambuStudio.conf` the way Bambu Studio saves LAN printers. Nothing from an `--emulator` run is saved: not the printers, their codes, the history or the widgets' data.
-- `--probe <ip> <serial> <access-code|keychain> [seconds] [--raw-filament]` connects to a printer from Terminal and prints what it reports (`keychain` uses the code Bambu Bar saved).
 - `scripts/showcase.sh <dir>` screenshots the panel, window and widgets in each demo state; `scripts/make-readme-animations.sh` renders the animations above, offscreen, from the demo printer.
 - `scripts/make-hms.py` regenerates the bundled error texts.
 - `scripts/make-filaments.py Resources/filaments.json` regenerates the filament presets and Bambu Lab colour names from Bambu Studio.
@@ -179,7 +175,7 @@ The **AppStore** configuration (scheme **BambuBar App Store**, also for Product 
 | Shortcut | Action |
 | --- | --- |
 | `⌘1` – `⌘5` | Printer, Filament, Widgets, Settings, About. |
-| `⌘R` | Ask the printer for a full report. |
+| `⌘R` | Ask the printer for a full report, through Bambuddy. |
 | `⌘L` | Turn the chamber light on or off. |
 | `⌘,` | Settings. |
 

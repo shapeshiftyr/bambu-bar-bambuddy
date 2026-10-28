@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Switches which printer the panel and window show. Each entry has the printer's state; "Add Printer…" at the end.
+/// Switches which printer the panel and window show. Each entry has the printer's state; "Bambuddy Server…" at the end.
 struct PrinterPicker<Label: View>: View {
     @Environment(PrinterStore.self) private var store
     @ViewBuilder var label: Label
@@ -19,7 +19,7 @@ struct PrinterPicker<Label: View>: View {
                 }
             }
             Divider()
-            Button("Add Printer…") { MainWindow.addPrinter() }
+            Button("Bambuddy Server…") { MainWindow.show(.printers) }
         } label: {
             label
         }

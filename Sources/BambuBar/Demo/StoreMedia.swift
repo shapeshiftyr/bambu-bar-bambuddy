@@ -402,11 +402,11 @@ private struct AlertsShot: View {
 /// What sets it apart, as tiles beside the icon.
 private struct PrivacyShot: View {
     private let points: [(String, String, String)] = [
-        ("wifi", "Straight from the printer", "Over your local network, the way the slicer does it in LAN mode. No cloud in between."),
+        ("server.rack", "From your Bambuddy", "Every printer your own Bambuddy server manages. No cloud in between."),
         ("person.crop.circle.badge.xmark", "No account", "Nothing to sign up for. Your printer can stay bound to your Bambu Lab account."),
-        ("hand.raised.fill", "Collects nothing", "No analytics, no tracking. Access codes stay in your keychain."),
+        ("hand.raised.fill", "Collects nothing", "No analytics, no tracking. Your API key stays in your keychain."),
         ("leaf.fill", "Light on your Mac", "Under 1% CPU in the background, even while printing."),
-        ("dot.radiowaves.left.and.right", "Finds your printers", "Discovers them on the network and follows them to a new IP address."),
+        ("arrow.triangle.2.circlepath", "Follows Bambuddy", "Printers added or removed there show up or disappear here."),
         ("globe", "18 languages", "With printer terms as Bambu Studio says them."),
     ]
 

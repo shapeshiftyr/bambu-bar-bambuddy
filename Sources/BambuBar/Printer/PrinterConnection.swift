@@ -1,27 +1,25 @@
-import AppKit
 import Foundation
 
-/// Where to find the printer. The access code lives in the Keychain, not here.
+/// A printer as Bambuddy knows it. Names and models follow Bambuddy; `name` can be changed in Bambu Bar.
 struct PrinterConfig: Codable, Equatable {
+    /// The printer's IP address as Bambuddy has it; shown, never connected to.
     var host: String
     var serial: String
     var name: String
-    /// SSDP model code ("N7" for the P2S).
+    /// Bambuddy's model ("X1C", "P1S") or a model id ("N7").
     var modelCode: String
+    /// The printer's id in Bambuddy's API.
+    var bambuddyID: Int = 0
+    /// The name Bambuddy has for it, to tell whether `name` was changed in Bambu Bar.
+    var bambuddyName: String?
 
     var modelName: String { PrinterModel.name(for: modelCode, serial: serial) }
     var model: PrinterModel? { PrinterModel.find(code: modelCode, serial: serial) }
-
-    /// Printers listen on 8883; `host:port` reaches a mock printer (scripts/fleet).
-    var endpoint: (host: String, port: UInt16) {
-        let parts = host.split(separator: ":")
-        guard parts.count == 2, let port = UInt16(parts[1]) else { return (host, 8883) }
-        return (String(parts[0]), port)
-    }
 }
 
-/// Keeps one MQTT session to the printer alive: connects, re-requests a full report, merges the deltas
-/// into a status, and reconnects with back-off when the printer drops off the network or the Mac sleeps.
+/// Follows one printer through the Bambuddy server: the full status from the REST API, WebSocket pushes merged
+/// over it (they carry only some fields) and a poll every so often for what isn't pushed (time left, errors).
+/// Commands go to Bambuddy, which passes them on to the printer.
 @MainActor
 final class PrinterConnection {
     enum Phase: Equatable {
@@ -29,17 +27,19 @@ final class PrinterConnection {
         case connecting
         case online
         case offline(String)
+        /// Bambuddy rejected the API key.
         case unauthorized
         case certificate(String)
-        /// macOS keeps Bambu Bar off the local network; retried, so it reconnects once access is turned on.
+        /// macOS keeps Bambu Bar off the local network, where the Bambuddy server is.
         case localNetworkDenied
     }
 
     var onPhase: ((Phase) -> Void)?
-    var onStatus: ((PrinterStatus, ReportDocument) -> Void)?
-    /// Any message from the printer, changed or not.
+    /// The status, and whether the job ended because someone stopped it.
+    var onStatus: ((PrinterStatus, Bool) -> Void)?
+    /// Any update from Bambuddy, changed or not.
     var onHeartbeat: (() -> Void)?
-    /// A command acknowledgement: command name, success, reason.
+    /// The outcome of a command: command name, success, reason.
     var onAck: ((String, Bool, String?) -> Void)?
 
     private(set) var phase: Phase = .idle {
@@ -47,164 +47,163 @@ final class PrinterConnection {
     }
 
     private var config: PrinterConfig?
-    private var accessCode = ""
-    private var insecure = false
-    private var client: MQTTClient?
-    private var document = ReportDocument()
+    private var hub: BambuddyHub?
+    private var serverPhase: Phase = .idle
+    /// Why the last request for this printer failed, when the server itself is fine.
+    private var failure: BambuddyError?
+    /// The latest status, REST and WebSocket merged.
+    private var document: [String: Any] = [:]
     private var lastStatus: PrinterStatus?
-    private var lastMessage = Date.distantPast
-    private var lastPushall = Date.distantPast
-    private var attempt = 0
-    private var retry: Timer?
-    private var watchdog: Timer?
-    private var sequence = 0
-    private var observers: [NSObjectProtocol] = []
+    private var poller: Task<Void, Never>?
 
-    init() {
-        let center = NSWorkspace.shared.notificationCenter
-        observers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reconnectSoon(after: 2) }
-        })
-        observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.suspend() }
-        })
-    }
-
-    func start(_ config: PrinterConfig, accessCode: String, insecure: Bool = false) {
+    func start(_ config: PrinterConfig, hub: BambuddyHub) {
         stop()
         self.config = config
-        self.accessCode = accessCode
-        self.insecure = insecure
-        attempt = 0
-        open()
-        watchdog = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.checkHealth() }
+        self.hub = hub
+        phase = .connecting
+        hub.register(config.bambuddyID, data: { [weak self] data in self?.pushed(data) },
+                     phase: { [weak self] phase in self?.serverPhaseChanged(phase) })
+        poller = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.poll()
+                // Pushes cover most changes; the poll catches the rest (time left, errors, Wi-Fi).
+                try? await Task.sleep(for: .seconds(self.hub?.isLive == true ? 30 : 10))
+            }
         }
     }
 
     func stop() {
-        retry?.invalidate()
-        watchdog?.invalidate()
-        retry = nil
-        watchdog = nil
-        closeClient()
+        poller?.cancel()
+        poller = nil
+        if let config { hub?.unregister(config.bambuddyID) }
+        hub = nil
         config = nil
+        failure = nil
         lastStatus = nil
-        document.reset()
+        document = [:]
         phase = .idle
     }
 
-    /// Asks for a full report now (after wake, or when the person clicks refresh).
+    /// Asks the printer for a full report and fetches the result (after wake, or when the person clicks refresh).
     func refresh() {
-        if phase == .online { requestFullReport() } else if config != nil { reconnectSoon(after: 0) }
+        guard let config, let hub else { return }
+        Task { [weak self] in
+            try? await hub.client.refresh(config.bambuddyID)
+            // The printer answers a refresh within a second or two.
+            try? await Task.sleep(for: .seconds(1.5))
+            await self?.poll()
+        }
     }
 
     // MARK: - Commands
 
-    func pause() { sendPrint(["command": "pause"]) }
-    func resume() { sendPrint(["command": "resume"]) }
-    func stopPrint() { sendPrint(["command": "stop"]) }
-    func setSpeed(_ level: SpeedLevel) { sendPrint(["command": "print_speed", "param": "\(level.rawValue)"]) }
+    func pause() { send("pause", "print/pause") }
+    func resume() { send("resume", "print/resume") }
+    func stopPrint() { send("stop", "print/stop") }
+    func setSpeed(_ level: SpeedLevel) { send("print_speed", "print-speed", [URLQueryItem(name: "mode", value: "\(level.rawValue)")]) }
+    func setChamberLight(_ on: Bool) { send("ledctrl", "chamber-light", [URLQueryItem(name: "on", value: on ? "true" : "false")]) }
 
-    func setChamberLight(_ on: Bool) {
-        send(["system": ["command": "ledctrl", "led_node": "chamber_light", "led_mode": on ? "on" : "off",
-                         "led_on_time": 500, "led_off_time": 500, "loop_times": 0, "interval_time": 0]], key: "system")
-    }
-
-    private func sendPrint(_ body: [String: Any]) { send(["print": body], key: "print") }
-
-    private func send(_ message: [String: Any], key: String) {
-        guard let config, let client, phase == .online else { return }
-        sequence += 1
-        var message = message
-        if var body = message[key] as? [String: Any] {
-            body["sequence_id"] = "\(sequence)"
-            message[key] = body
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
-        client.publish("device/\(config.serial)/request", payload: data)
-    }
-
-    // MARK: - Session
-
-    private func open() {
-        guard let config else { return }
-        closeClient()
-        phase = .connecting
-        // The watchdog measures silence from here, so it doesn't cut off an attempt that's still connecting.
-        lastMessage = Date()
-        let endpoint = config.endpoint
-        let client = MQTTClient(.init(host: endpoint.host, port: endpoint.port, password: accessCode, serial: config.serial,
-                                      insecure: insecure))
-        client.onEvent = { [weak self, weak client] event in
-            MainActor.assumeIsolated {
-                guard let self, let client, client === self.client else { return }
-                self.handle(event)
+    private func send(_ command: String, _ path: String, _ query: [URLQueryItem] = []) {
+        guard let config, let hub else { return }
+        let id = config.bambuddyID
+        Task { [weak self] in
+            do {
+                try await hub.client.command(id, path, query: query)
+                self?.onAck?(command, true, nil)
+                // The printer takes a moment to report the change.
+                try? await Task.sleep(for: .seconds(1.5))
+                await self?.poll()
+            } catch let error as BambuddyError {
+                self?.onAck?(command, false, Self.reason(error))
+                hub.report(error)
+            } catch {
+                self?.onAck?(command, false, error.localizedDescription)
             }
         }
-        self.client = client
-        client.connect()
     }
 
-    private func closeClient() {
-        client?.onEvent = nil
-        client?.disconnect()
-        client = nil
+    private static func reason(_ error: BambuddyError) -> String {
+        switch error {
+        case .forbidden:
+            return String(localized: "This API key can't control printers. Turn on Control for it in Bambuddy → Settings → API Keys.")
+        case .notConnected:
+            return String(localized: "Bambuddy isn't connected to the printer right now.")
+        default:
+            return error.message
+        }
     }
 
-    private func handle(_ event: MQTTClient.Event) {
-        guard let config else { return }
-        switch event {
-        case .connected:
-            lastMessage = Date()
-            client?.subscribe("device/\(config.serial)/report")
-            sendRaw(["info": ["sequence_id": "0", "command": "get_version"]])
-            requestFullReport()
-            // Stay "connecting" until the first report arrives, so a silent broker doesn't look online.
-        case .message(_, let payload):
-            lastMessage = Date()
-            onHeartbeat?()
-            guard let json = Self.decode(payload) else { return }
-            if let p = json["print"] as? [String: Any], let command = p["command"] as? String,
-               command != "push_status", let result = p["result"] as? String {
-                onAck?(command, result.lowercased() == "success", p["reason"] as? String)
+    // MARK: - Status
+
+    private func poll() async {
+        guard let config, let hub else { return }
+        do {
+            let status = try await hub.client.status(config.bambuddyID)
+            guard self.config?.bambuddyID == config.bambuddyID else { return }
+            failure = nil
+            // The REST status is complete, so it replaces what pushes merged in.
+            document = status
+            received()
+        } catch let error as BambuddyError {
+            guard self.config?.bambuddyID == config.bambuddyID else { return }
+            switch error {
+            case .unauthorized, .certificate, .localNetworkDenied, .unreachable:
+                hub.report(error)
+            case .forbidden, .notConnected, .server:
+                failure = error
+                updatePhase()
             }
-            guard document.apply(json) else { return }
-            guard document.hasFullReport || document.print["gcode_state"] != nil else { return }
-            if phase != .online {
-                // Back-off resets only once the printer is really talking, not on a CONNACK alone.
-                attempt = 0
-                phase = .online
-            }
-            publishStatus()
-        case .disconnected(let failure):
-            client = nil
-            switch failure {
-            case .refused(let code) where code == 4 || code == 5:
-                // A wrong access code won't fix itself; wait for the person to change it.
-                phase = .unauthorized
-                return
-            case .certificate(let reason):
-                // A certificate that doesn't check out won't fix itself either; don't keep sending it the code.
-                phase = .certificate(reason)
-                return
-            case .unreachable(let reason):
-                phase = .offline(reason)
-            case .localNetworkDenied:
-                phase = .localNetworkDenied
-            case .timedOut:
-                phase = .offline(String(localized: "The printer stopped answering."))
-            case .closed, .malformed, .refused:
-                phase = .offline(String(localized: "The connection to the printer closed."))
-            }
-            scheduleReconnect()
+        } catch {
+            failure = .unreachable(error.localizedDescription)
+            updatePhase()
+        }
+    }
+
+    /// A WebSocket push: some of the status fields, merged over the rest as Bambuddy's own web page does.
+    private func pushed(_ data: [String: Any]) {
+        guard config != nil else { return }
+        document.merge(data) { _, new in new }
+        received()
+    }
+
+    private func received() {
+        onHeartbeat?()
+        updatePhase()
+        guard phase == .online else { return }
+        publishStatus()
+    }
+
+    private func serverPhaseChanged(_ phase: Phase) {
+        serverPhase = phase
+        updatePhase()
+    }
+
+    private func updatePhase() {
+        guard config != nil else { return }
+        switch serverPhase {
+        case .unauthorized, .certificate, .localNetworkDenied, .offline:
+            phase = serverPhase
+            return
+        default:
+            break
+        }
+        if let failure {
+            phase = .offline(failure.message)
+        } else if document["state"] == nil {
+            phase = .connecting
+        } else if document["connected"] as? Bool == false {
+            phase = .offline(String(localized: "Bambuddy can't reach this printer. Check that it's on and connected to the network."))
+        } else {
+            phase = .online
         }
     }
 
     private func publishStatus() {
-        var status = ReportParser.status(from: document, hms: HMSCatalog.shared)
+        guard let config else { return }
+        var status = BambuddyParser.status(from: document, model: config.model)
         if let last = lastStatus {
-            // Keep the timestamp the remaining time was measured at, so the ETA doesn't drift between reports.
+            // Keep the timestamp the remaining time was measured at, so the ETA doesn't drift between updates.
             var same = status
             same.updatedAt = last.updatedAt
             if same == last { return }
@@ -213,61 +212,6 @@ final class PrinterConnection {
             }
         }
         lastStatus = status
-        onStatus?(status, document)
-    }
-
-    private func requestFullReport() {
-        lastPushall = Date()
-        sendRaw(["pushing": ["sequence_id": "0", "command": "pushall"]])
-    }
-
-    private func sendRaw(_ message: [String: Any]) {
-        guard let config, let client, let data = try? JSONSerialization.data(withJSONObject: message) else { return }
-        client.publish("device/\(config.serial)/request", payload: data)
-    }
-
-    private func checkHealth() {
-        guard config != nil else { return }
-        let silence = Date().timeIntervalSince(lastMessage)
-        switch phase {
-        case .online:
-            if silence > 95 {
-                phase = .offline(String(localized: "The printer stopped sending updates."))
-                reconnectSoon(after: 0)
-            } else if silence > 60 || Date().timeIntervalSince(lastPushall) > 300 {
-                requestFullReport()
-            }
-        case .connecting:
-            if client != nil, silence > 25 { reconnectSoon(after: 0) }
-        default:
-            break
-        }
-    }
-
-    private func scheduleReconnect() {
-        let delays: [TimeInterval] = [2, 4, 8, 15, 30]
-        let delay = delays[min(attempt, delays.count - 1)]
-        attempt += 1
-        reconnectSoon(after: delay)
-    }
-
-    private func reconnectSoon(after delay: TimeInterval) {
-        guard config != nil else { return }
-        retry?.invalidate()
-        retry = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.open() }
-        }
-    }
-
-    private func suspend() {
-        retry?.invalidate()
-        closeClient()
-    }
-
-    /// Some firmware sends bytes that aren't valid UTF-8; fall back to Latin-1 rather than drop the report.
-    private static func decode(_ data: Data) -> [String: Any]? {
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { return json }
-        guard let text = String(data: data, encoding: .isoLatin1), let utf8 = text.data(using: .utf8) else { return nil }
-        return try? JSONSerialization.jsonObject(with: utf8) as? [String: Any]
+        onStatus?(status, BambuddyParser.wasCanceled(document))
     }
 }
